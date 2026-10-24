@@ -146,4 +146,3 @@ cdk.json                       # CDK configuration
 ---
 
 **Author:** Fatuma Abdo · [LinkedIn](https://www.linkedin.com/in/fatuma-abdo-3b729a3a4)
-
