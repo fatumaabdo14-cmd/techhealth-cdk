@@ -1,78 +1,149 @@
-TechHealth Patient Portal — AWS Infrastructure (CDK)
+# TechHealth Patient Portal — AWS Infrastructure (CDK)
 
-Infrastructure as Code for migrating the TechHealth Inc. patient portal from a manually built environment to AWS, defined in AWS CDK (TypeScript). The stack provisions a segmented network, an application server, and a private, encrypted MySQL database, with access controls designed around least privilege.
+Infrastructure as Code for migrating the TechHealth Inc. patient portal to AWS, built with **AWS CDK (TypeScript)**. The stack provisions a segmented network, an application server, and a private, encrypted MySQL database, with access designed around least privilege.
 
-Stack: AWS CDK · TypeScript · Amazon VPC · EC2 · RDS for MySQL · Secrets Manager · IAM · Systems Manager
-diagram.png
+| | |
+|---|---|
+| **IaC** | AWS CDK v2 (TypeScript) |
+| **Region** | us-west-1 (2 Availability Zones) |
+| **Services** | VPC · EC2 · RDS for MySQL · Secrets Manager · IAM · Systems Manager |
 
-Network layout
-Subnet	CIDR	Type	Purpose
-publicSubnet1	10.0.0.0/24	Public	Application server
-publicSubnet2	10.0.1.0/24	Public	Second AZ
-privateSubnet1	10.0.2.0/24	Private isolated	Database
-privateSubnet2	10.0.3.0/24	Private isolated	Database (RDS subnet groups require 2 AZs)
-Security design
-Control	Implementation
-Database isolation	RDS runs in PRIVATE_ISOLATED subnets with publiclyAccessible: false; there is no route to or from the internet.
-Least-privilege network access	The RDS security group allows port 3306 only from the EC2 security group (SG-to-SG reference), not from any CIDR range. RDS outbound traffic is disabled.
-Restricted administration	SSH (22) is limited to a single /32 administrator IP. Session Manager is enabled through the instance role, so access works without open ports or SSH keys.
-No hardcoded credentials	Database credentials are generated at deploy time and stored in Secrets Manager. The EC2 role is granted read access to that one secret only.
-Encryption at rest	storageEncrypted: true on the RDS instance.
-Instance identity	EC2 uses an IAM role (temporary credentials), not access keys.
-Design decisions and tradeoffs
-No NAT gateway. A NAT gateway costs roughly $32/month per AZ. The database does not need internet access, so the private subnets are PRIVATE_ISOLATED. Tradeoff: resources in those subnets cannot reach the internet for patches; RDS is managed by AWS, so this does not apply to it.
-Single-AZ RDS. multiAz: false keeps this environment cost-efficient for development. For production, enable Multi-AZ for automatic failover.
-Single EC2 instance in a public subnet. Simple and inexpensive for this stage. A production design would put an Application Load Balancer in the public subnets and move instances into private subnets behind an Auto Scaling group.
-RemovalPolicy.DESTROY and no deletion protection. Intentional for a dev environment so cdk destroy removes everything cleanly and leaves no billable snapshots. Production databases should use SNAPSHOT or RETAIN with deletion protection enabled.
-Deploy
+---
 
-Prerequisites: Node.js, AWS CLI configured, AWS CDK v2.
+## Architecture
 
-bash
+![TechHealth architecture diagram](diagram.png)
+
+### Network layout
+
+| Subnet | CIDR | Type | Purpose |
+|---|---|---|---|
+| Public subnet (AZ-1) | 10.0.0.0/24 | Public | Application server (EC2) |
+| Public subnet (AZ-2) | 10.0.1.0/24 | Public | Reserved for scale-out |
+| Private subnet (AZ-1) | 10.0.2.0/24 | Private isolated | Database (RDS primary) |
+| Private subnet (AZ-2) | 10.0.3.0/24 | Private isolated | Database subnet group / planned Multi-AZ standby |
+
+### Resources
+
+| Resource | Configuration |
+|---|---|
+| VPC | 10.0.0.0/16, 2 AZs, internet gateway, **no NAT gateway** |
+| EC2 | t3.micro, Amazon Linux 2023, public subnet |
+| RDS | MySQL 8.4, db.t3.micro, 20 GB, encrypted, private subnet |
+| Secrets Manager | Auto-generated database credentials |
+| IAM role | Attached to EC2: Session Manager access + read the DB secret |
+
+---
+
+## Security design
+
+| Control | How it is implemented |
+|---|---|
+| Database isolation | RDS runs in private isolated subnets with public access disabled. No route to or from the internet. |
+| Least-privilege network access | RDS security group allows port **3306 only from the EC2 security group**, not from an IP range. RDS outbound traffic is disabled. |
+| Restricted administration | SSH (22) limited to a single administrator IP. Session Manager enabled, so access works without SSH keys. |
+| No hardcoded credentials | DB password generated at deploy time and stored in Secrets Manager. The EC2 role can read that one secret only. |
+| Encryption at rest | RDS storage encryption enabled. |
+| Instance identity | EC2 uses an IAM role (temporary credentials), never access keys. |
+
+### Security group rules
+
+| Security group | Inbound | Source |
+|---|---|---|
+| EC2-SG | HTTP 80, HTTPS 443 | 0.0.0.0/0 |
+| EC2-SG | SSH 22 | Administrator IP (/32) only |
+| RDS-SG | MySQL 3306 | EC2-SG only |
+
+---
+
+## Design decisions and tradeoffs
+
+| Decision | Reason | Production path |
+|---|---|---|
+| No NAT gateway | Saves ~$32/month per AZ; the database never needs internet access | Add NAT or VPC endpoints if private workloads need outbound access |
+| Single EC2 instance | Keeps the dev environment cost-efficient | Application Load Balancer + Auto Scaling group across both AZs |
+| Single-AZ RDS | Network is already Multi-AZ ready; standby not needed in dev | Set `multiAz: true` for automatic failover |
+| `RemovalPolicy.DESTROY` | `cdk destroy` removes everything cleanly, no leftover snapshots | Use `SNAPSHOT` or `RETAIN` with deletion protection |
+
+---
+
+## Deploy
+
+**Prerequisites:** Node.js, AWS CLI configured, AWS CDK v2
+
+```bash
 npm install
-cdk bootstrap            # first time per account/region
-cdk synth                # review the generated CloudFormation
-cdk diff                 # preview changes
+cdk bootstrap     # first time per account/region
+cdk synth         # generate CloudFormation
+cdk diff          # preview changes
 cdk deploy
+```
 
-Stack outputs:
+### Stack outputs
 
-Output	Description
-EC2PublicIp	Public IP of the application server
-RdsEndpoint	Private endpoint of the MySQL database
-DbSecretName	Secrets Manager secret holding the DB credentials
-Connect to the database from EC2
-bash
-# On the instance (via Session Manager)
+| Output | Description |
+|---|---|
+| `EC2PublicIp` | Public IP of the application server |
+| `RdsEndpoint` | Private endpoint of the MySQL database |
+| `DbSecretName` | Secrets Manager secret holding the DB credentials |
+
+### Connect to the database from EC2
+
+```bash
 sudo dnf install -y mariadb105
 mysql -h <RdsEndpoint> -u admin -p
-# Password: Secrets Manager → <DbSecretName> → Retrieve secret value
-Tear down
-bash
+```
+
+Password: Secrets Manager → `<DbSecretName>` → Retrieve secret value.
+
+---
+
+## Tear down
+
+```bash
 cdk destroy
+```
 
-The environment is destroyed when not in use and redeployed on demand; the code is the source of truth.
+The environment is destroyed when not in use and redeployed on demand. The code is the source of truth.
 
-Verification
+---
 
-Screenshots from a live deployment are in screenshots/:
+## Verified in a live deployment
 
-CloudFormation stack resources
-EC2 instance running in the public subnet
-RDS instance — available, not publicly accessible
-VPC subnets across two availability zones
-RDS security group — inbound 3306 from the EC2 security group only
-Roadmap
-Application Load Balancer + Auto Scaling group, with instances moved to private subnets
-HTTPS with an ACM certificate on the load balancer
-Multi-AZ RDS and automated backup retention for production
-Remove the SSH rule entirely in favor of Session Manager
-CloudWatch alarms for CPU, database connections, and free storage
-CI/CD with GitHub Actions running cdk diff on pull requests and cdk deploy on merge
-Project structure
+| Check | Result |
+|---|---|
+| CloudFormation stack | `CREATE_COMPLETE` |
+| EC2 instance | Running in public subnet |
+| RDS instance | Available, not publicly accessible |
+| Subnets | Public and private across two AZs |
+| RDS security group | Inbound 3306 from EC2 security group only |
+
+---
+
+## Roadmap
+
+| Next step | Benefit |
+|---|---|
+| ALB + Auto Scaling group, instances in private subnets | High availability, no public instances |
+| HTTPS with ACM certificate | Encrypted traffic in transit |
+| Multi-AZ RDS + backup retention | Automatic database failover |
+| Remove SSH rule (Session Manager only) | Smaller attack surface |
+| CloudWatch alarms | Alerts on CPU, connections, storage |
+| GitHub Actions CI/CD | `cdk diff` on pull requests, `cdk deploy` on merge |
+
+---
+
+## Project structure
+
+```
 bin/techhealth-cdk.ts          # App entry point
 lib/techhealth-cdk-stack.ts    # VPC, security groups, IAM role, EC2, RDS
 test/techhealth-cdk.test.ts    # Stack tests
+diagram.png                    # Architecture diagram
 cdk.json                       # CDK configuration
+```
 
-Author: Fatuma Abdo · LinkedIn
+---
+
+**Author:** Fatuma Abdo · [LinkedIn](https://www.linkedin.com/in/fatuma-abdo-3b729a3a4)
+
