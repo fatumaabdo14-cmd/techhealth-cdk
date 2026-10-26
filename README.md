@@ -181,4 +181,4 @@ The first deploy failed because the EC2 instance type was not Free Tier eligible
 
 ---
 
-**Author:** Fatuma Abdo · [LinkedIn](https://www.linkedin.com/in/fatuma-abdo-3b729a3a4)
+**Author:** Fatuma Abdo · [Meduim] https://medium.com/@fatumaabdo14/rebuilding-a-healthcare-patient-portal-on-aws-with-cdk-0d8014d3e4d4
