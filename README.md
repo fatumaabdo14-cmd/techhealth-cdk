@@ -141,7 +141,43 @@ lib/techhealth-cdk-stack.ts    # VPC, security groups, IAM role, EC2, RDS
 test/techhealth-cdk.test.ts    # Stack tests
 diagram.png                    # Architecture diagram
 cdk.json                       # CDK configuration
+
 ```
+## The problem
+TechHealth, a healthcare case study, ran its patient portal on AWS resources created manually in the console five years ago. There was no version control or audit trail, rebuilding the environment was error-prone, and the database holding patient data was publicly reachable.
+
+## What I built
+The full environment as Infrastructure as Code with AWS CDK (TypeScript): a two-AZ VPC, an application server in a public subnet, and an encrypted MySQL database in isolated private subnets with no route to the internet. Database credentials are generated at deploy time and stored in Secrets Manager.
+
+## Key decisions
+| Decision | Chosen over | Why |
+|---|---|---|
+| RDS security group allows 3306 only from the EC2 security group | IP-based rules | Access follows the resource, not an address. Nothing else can reach the database. |
+| No NAT Gateway | NAT Gateway per AZ | The database never needs outbound internet. Saves ~$64/month across two AZs. |
+
+## What broke
+The first deploy failed because the EC2 instance type was not Free Tier eligible for this account and region. Instead of guessing, I queried AWS with `aws ec2 describe-instance-types --filters Name=free-tier-eligible,Values=true`, selected t3.micro from the returned list, and redeployed successfully.
+
+## Result
+- Database with zero public exposure
+- ~$64/month saved by avoiding NAT Gateways
+- Entire environment deploys and tears down with one command
+
+## Cost considerations
+- EC2 t3.micro and RDS db.t3.micro: Free Tier eligible
+- No NAT Gateway: ~$32/month saved per AZ
+- Single-AZ RDS: avoids doubling database cost in dev
+- Secrets Manager: ~$0.40/month per secret
+- Environment destroyed when not in use
+
+## Lessons learned
+| Issue | Takeaway |
+|---|---|
+| `cdk bootstrap` failed on leftover resources | Stale bootstrap roles and buckets (`hnb659fds`) must be cleaned up per region before re-bootstrapping |
+| Instance type not Free Tier eligible | Eligibility varies by account and region; verify with `describe-instance-types` |
+| RDS engine version rejected | Pin an exact engine version (MySQL 8.4.9) |
+| db.t2.micro rejected for MySQL 8.4 | Use db.t3.micro for current MySQL versions |
+| Unencrypted storage flagged | Enable `storageEncrypted` for any workload holding patient data |
 
 ---
 
